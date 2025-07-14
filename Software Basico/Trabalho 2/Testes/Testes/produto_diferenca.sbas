@@ -1,0 +1,6 @@
+v1 : p1        // x
+v2 : p2        // y
+v3 = v1 + v2   // soma
+v4 = v1 - v2   // diferença
+v1 = v3 * v4   // produto
+ret v1

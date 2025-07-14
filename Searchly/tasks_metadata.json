@@ -1,0 +1,66 @@
+[
+  {
+    "TaskId": "Estudar C# e POO_20250714151636",
+    "Name": "Estudar C# e POO",
+    "DifficultyLevel": "Médio",
+    "CreationDate": "2025-07-14 15:16:36",
+    "DueDate": "2025-07-24 15:16:36",
+    "IsCompleted": true
+  },
+  {
+    "TaskId": "Fazer compras_20250714151636",
+    "Name": "Fazer compras",
+    "DifficultyLevel": "Baixa",
+    "CreationDate": "2025-07-14 15:16:36",
+    "DueDate": "2025-07-16 15:16:36",
+    "IsCompleted": true
+  },
+  {
+    "TaskId": "Ir na academia_20250714151636",
+    "Name": "Ir na academia",
+    "DifficultyLevel": "Média",
+    "CreationDate": "2025-07-14 15:16:36",
+    "DueDate": "2025-07-15 15:16:36",
+    "IsCompleted": true
+  },
+  {
+    "TaskId": "Organizar agenda pois Juju vai pedir_20250714151636",
+    "Name": "Organizar agenda pois Juju vai pedir",
+    "DifficultyLevel": "Baixa",
+    "CreationDate": "2025-07-14 15:16:36",
+    "DueDate": "2025-07-17 15:16:36",
+    "IsCompleted": false
+  },
+  {
+    "TaskId": "Estudar C# e POO_20250714151908",
+    "Name": "Estudar C# e POO",
+    "DifficultyLevel": "Médio",
+    "CreationDate": "2025-07-14 15:19:08",
+    "DueDate": "2025-07-24 15:19:08",
+    "IsCompleted": false
+  },
+  {
+    "TaskId": "Fazer compras_20250714151908",
+    "Name": "Fazer compras",
+    "DifficultyLevel": "Baixa",
+    "CreationDate": "2025-07-14 15:19:08",
+    "DueDate": "2025-07-16 15:19:08",
+    "IsCompleted": false
+  },
+  {
+    "TaskId": "Ir na academia_20250714151908",
+    "Name": "Ir na academia",
+    "DifficultyLevel": "Média",
+    "CreationDate": "2025-07-14 15:19:08",
+    "DueDate": "2025-07-15 15:19:08",
+    "IsCompleted": false
+  },
+  {
+    "TaskId": "Organizar agenda pois Juju vai pedir_20250714151908",
+    "Name": "Organizar agenda pois Juju vai pedir",
+    "DifficultyLevel": "Baixa",
+    "CreationDate": "2025-07-14 15:19:08",
+    "DueDate": "2025-07-17 15:19:08",
+    "IsCompleted": false
+  }
+]
