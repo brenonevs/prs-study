@@ -24,15 +24,48 @@ namespace Searchly
             {
                 connection.Open();
                 
+                bool needsRecreation = false;
+                
+                try
+                {
+                    using (var command = new SQLiteCommand("SELECT TaskType FROM TaskContent LIMIT 1", connection))
+                    {
+                        command.ExecuteScalar();
+                    }
+                }
+                catch
+                {
+                    needsRecreation = true;
+                }
+                
+                if (needsRecreation)
+                {
+                    using (var dropCommand = new SQLiteCommand("DROP TABLE IF EXISTS TaskContent", connection))
+                    {
+                        dropCommand.ExecuteNonQuery();
+                    }
+                }
+                
                 string createTableSql = @"
                     CREATE TABLE IF NOT EXISTS TaskContent (
                         TaskId TEXT PRIMARY KEY,
+                        TaskType TEXT NOT NULL,
                         Name TEXT NOT NULL,
                         Description TEXT,
                         DifficultyLevel TEXT,
                         CreationDate TEXT,
                         DueDate TEXT,
-                        IsCompleted INTEGER DEFAULT 0
+                        IsCompleted INTEGER DEFAULT 0,
+                        Project TEXT,
+                        Priority TEXT,
+                        Category TEXT,
+                        IsUrgent INTEGER DEFAULT 0,
+                        Subject TEXT,
+                        StudyHours INTEGER DEFAULT 0,
+                        StudyMethod TEXT,
+                        ActivityType TEXT,
+                        Duration INTEGER DEFAULT 0,
+                        Location TEXT
                     )";
 
                 using (var command = new SQLiteCommand(createTableSql, connection))
@@ -54,15 +87,18 @@ namespace Searchly
             
             foreach (var task in tasks)
             {
-                metadata.Add(new
+                var baseMetadata = new
                 {
                     TaskId = GenerateTaskId(task),
+                    TaskType = task.TaskType,
                     Name = task.Name,
                     DifficultyLevel = task.DifficultyLevel,
                     CreationDate = task.CreationDate.ToString("yyyy-MM-dd HH:mm:ss"),
                     DueDate = task.DueDate.ToString("yyyy-MM-dd HH:mm:ss"),
                     IsCompleted = task.IsCompleted
-                });
+                };
+
+                metadata.Add(baseMetadata);
             }
 
             string json = JsonConvert.SerializeObject(metadata, Formatting.Indented);
@@ -81,8 +117,10 @@ namespace Searchly
                 }
 
                 string insertSql = @"
-                    INSERT INTO TaskContent (TaskId, Name, Description, DifficultyLevel, CreationDate, DueDate, IsCompleted)
-                    VALUES (@TaskId, @Name, @Description, @DifficultyLevel, @CreationDate, @DueDate, @IsCompleted)";
+                    INSERT INTO TaskContent (TaskId, TaskType, Name, Description, DifficultyLevel, CreationDate, DueDate, IsCompleted, 
+                                           Project, Priority, Category, IsUrgent, Subject, StudyHours, StudyMethod, ActivityType, Duration, Location)
+                    VALUES (@TaskId, @TaskType, @Name, @Description, @DifficultyLevel, @CreationDate, @DueDate, @IsCompleted,
+                           @Project, @Priority, @Category, @IsUrgent, @Subject, @StudyHours, @StudyMethod, @ActivityType, @Duration, @Location)";
 
                 using (var command = new SQLiteCommand(insertSql, connection))
                 {
@@ -90,12 +128,47 @@ namespace Searchly
                     {
                         command.Parameters.Clear();
                         command.Parameters.AddWithValue("@TaskId", GenerateTaskId(task));
+                        command.Parameters.AddWithValue("@TaskType", task.TaskType);
                         command.Parameters.AddWithValue("@Name", task.Name);
                         command.Parameters.AddWithValue("@Description", task.Description);
                         command.Parameters.AddWithValue("@DifficultyLevel", task.DifficultyLevel);
                         command.Parameters.AddWithValue("@CreationDate", task.CreationDate.ToString("yyyy-MM-dd HH:mm:ss"));
                         command.Parameters.AddWithValue("@DueDate", task.DueDate.ToString("yyyy-MM-dd HH:mm:ss"));
                         command.Parameters.AddWithValue("@IsCompleted", task.IsCompleted ? 1 : 0);
+                        
+                        command.Parameters.AddWithValue("@Project", DBNull.Value);
+                        command.Parameters.AddWithValue("@Priority", DBNull.Value);
+                        command.Parameters.AddWithValue("@Category", DBNull.Value);
+                        command.Parameters.AddWithValue("@IsUrgent", DBNull.Value);
+                        command.Parameters.AddWithValue("@Subject", DBNull.Value);
+                        command.Parameters.AddWithValue("@StudyHours", DBNull.Value);
+                        command.Parameters.AddWithValue("@StudyMethod", DBNull.Value);
+                        command.Parameters.AddWithValue("@ActivityType", DBNull.Value);
+                        command.Parameters.AddWithValue("@Duration", DBNull.Value);
+                        command.Parameters.AddWithValue("@Location", DBNull.Value);
+
+                        if (task is WorkTask workTask)
+                        {
+                            command.Parameters["@Project"].Value = workTask.Project;
+                            command.Parameters["@Priority"].Value = workTask.Priority;
+                        }
+                        else if (task is PersonalTask personalTask)
+                        {
+                            command.Parameters["@Category"].Value = personalTask.Category;
+                            command.Parameters["@IsUrgent"].Value = personalTask.IsUrgent ? 1 : 0;
+                        }
+                        else if (task is StudyTask studyTask)
+                        {
+                            command.Parameters["@Subject"].Value = studyTask.Subject;
+                            command.Parameters["@StudyHours"].Value = studyTask.StudyHours;
+                            command.Parameters["@StudyMethod"].Value = studyTask.StudyMethod;
+                        }
+                        else if (task is HealthTask healthTask)
+                        {
+                            command.Parameters["@ActivityType"].Value = healthTask.ActivityType;
+                            command.Parameters["@Duration"].Value = healthTask.Duration;
+                            command.Parameters["@Location"].Value = healthTask.Location;
+                        }
                         
                         command.ExecuteNonQuery();
                     }
@@ -114,11 +187,9 @@ namespace Searchly
 
             try
             {
-                // Carrega metadados do JSON
                 string jsonContent = File.ReadAllText(JsonFilePath);
                 var metadata = JsonConvert.DeserializeObject<List<dynamic>>(jsonContent);
-
-                // Carrega conteúdo do SQLite
+                
                 using (var connection = new SQLiteConnection(ConnectionString))
                 {
                     connection.Open();
@@ -129,6 +200,7 @@ namespace Searchly
                     {
                         while (reader.Read())
                         {
+                            var taskType = reader["TaskType"]?.ToString() ?? "";
                             var name = reader["Name"]?.ToString() ?? "";
                             var description = reader["Description"]?.ToString() ?? "";
                             var difficultyLevel = reader["DifficultyLevel"]?.ToString() ?? "";
@@ -139,16 +211,14 @@ namespace Searchly
                                 !string.IsNullOrEmpty(creationDateStr) && 
                                 !string.IsNullOrEmpty(dueDateStr))
                             {
-                                var task = new Task(
-                                    name,
-                                    description,
-                                    difficultyLevel,
-                                    DateTime.Parse(creationDateStr),
-                                    DateTime.Parse(dueDateStr)
-                                );
-
-                                task.IsCompleted = Convert.ToBoolean(reader["IsCompleted"]);
-                                tasks.Add(task);
+                                Task? task = CreateTaskByType(taskType, name, description, difficultyLevel, 
+                                                          DateTime.Parse(creationDateStr), DateTime.Parse(dueDateStr), reader);
+                                
+                                if (task != null)
+                                {
+                                    task.IsCompleted = Convert.ToBoolean(reader["IsCompleted"]);
+                                    tasks.Add(task);
+                                }
                             }
                         }
                     }
@@ -162,6 +232,38 @@ namespace Searchly
             return tasks;
         }
 
+        private Task? CreateTaskByType(string taskType, string name, string description, string difficultyLevel, 
+                                    DateTime creationDate, DateTime dueDate, SQLiteDataReader reader)
+        {
+            switch (taskType)
+            {
+                case "Trabalho":
+                    var project = reader["Project"]?.ToString() ?? "";
+                    var priority = reader["Priority"]?.ToString() ?? "";
+                    return new WorkTask(name, description, difficultyLevel, creationDate, dueDate, project, priority);
+                
+                case "Pessoal":
+                    var category = reader["Category"]?.ToString() ?? "";
+                    var isUrgent = Convert.ToBoolean(reader["IsUrgent"]);
+                    return new PersonalTask(name, description, difficultyLevel, creationDate, dueDate, category, isUrgent);
+                
+                case "Estudo":
+                    var subject = reader["Subject"]?.ToString() ?? "";
+                    var studyHours = Convert.ToInt32(reader["StudyHours"]);
+                    var studyMethod = reader["StudyMethod"]?.ToString() ?? "";
+                    return new StudyTask(name, description, difficultyLevel, creationDate, dueDate, subject, studyHours, studyMethod);
+                
+                case "Saúde":
+                    var activityType = reader["ActivityType"]?.ToString() ?? "";
+                    var duration = Convert.ToInt32(reader["Duration"]);
+                    var location = reader["Location"]?.ToString() ?? "";
+                    return new HealthTask(name, description, difficultyLevel, creationDate, dueDate, activityType, duration, location);
+                
+                default:
+                    return null;
+            }
+        }
+
         public void UpdateTask(Task task)
         {
             using (var connection = new SQLiteConnection(ConnectionString))
@@ -170,19 +272,57 @@ namespace Searchly
                 
                 string updateSql = @"
                     UPDATE TaskContent 
-                    SET Name = @Name, Description = @Description, DifficultyLevel = @DifficultyLevel,
-                        CreationDate = @CreationDate, DueDate = @DueDate, IsCompleted = @IsCompleted
+                    SET TaskType = @TaskType, Name = @Name, Description = @Description, DifficultyLevel = @DifficultyLevel,
+                        CreationDate = @CreationDate, DueDate = @DueDate, IsCompleted = @IsCompleted,
+                        Project = @Project, Priority = @Priority, Category = @Category, IsUrgent = @IsUrgent,
+                        Subject = @Subject, StudyHours = @StudyHours, StudyMethod = @StudyMethod,
+                        ActivityType = @ActivityType, Duration = @Duration, Location = @Location
                     WHERE TaskId = @TaskId";
 
                 using (var command = new SQLiteCommand(updateSql, connection))
                 {
                     command.Parameters.AddWithValue("@TaskId", GenerateTaskId(task));
+                    command.Parameters.AddWithValue("@TaskType", task.TaskType);
                     command.Parameters.AddWithValue("@Name", task.Name);
                     command.Parameters.AddWithValue("@Description", task.Description);
                     command.Parameters.AddWithValue("@DifficultyLevel", task.DifficultyLevel);
                     command.Parameters.AddWithValue("@CreationDate", task.CreationDate.ToString("yyyy-MM-dd HH:mm:ss"));
                     command.Parameters.AddWithValue("@DueDate", task.DueDate.ToString("yyyy-MM-dd HH:mm:ss"));
                     command.Parameters.AddWithValue("@IsCompleted", task.IsCompleted ? 1 : 0);
+                    
+                    command.Parameters.AddWithValue("@Project", DBNull.Value);
+                    command.Parameters.AddWithValue("@Priority", DBNull.Value);
+                    command.Parameters.AddWithValue("@Category", DBNull.Value);
+                    command.Parameters.AddWithValue("@IsUrgent", DBNull.Value);
+                    command.Parameters.AddWithValue("@Subject", DBNull.Value);
+                    command.Parameters.AddWithValue("@StudyHours", DBNull.Value);
+                    command.Parameters.AddWithValue("@StudyMethod", DBNull.Value);
+                    command.Parameters.AddWithValue("@ActivityType", DBNull.Value);
+                    command.Parameters.AddWithValue("@Duration", DBNull.Value);
+                    command.Parameters.AddWithValue("@Location", DBNull.Value);
+
+                    if (task is WorkTask workTask)
+                    {
+                        command.Parameters["@Project"].Value = workTask.Project;
+                        command.Parameters["@Priority"].Value = workTask.Priority;
+                    }
+                    else if (task is PersonalTask personalTask)
+                    {
+                        command.Parameters["@Category"].Value = personalTask.Category;
+                        command.Parameters["@IsUrgent"].Value = personalTask.IsUrgent ? 1 : 0;
+                    }
+                    else if (task is StudyTask studyTask)
+                    {
+                        command.Parameters["@Subject"].Value = studyTask.Subject;
+                        command.Parameters["@StudyHours"].Value = studyTask.StudyHours;
+                        command.Parameters["@StudyMethod"].Value = studyTask.StudyMethod;
+                    }
+                    else if (task is HealthTask healthTask)
+                    {
+                        command.Parameters["@ActivityType"].Value = healthTask.ActivityType;
+                        command.Parameters["@Duration"].Value = healthTask.Duration;
+                        command.Parameters["@Location"].Value = healthTask.Location;
+                    }
                     
                     command.ExecuteNonQuery();
                 }
@@ -191,7 +331,6 @@ namespace Searchly
             var allTasks = LoadTasks();
             SaveMetadataToJson(allTasks);
         }
-
 
         public void RemoveTask(Task task)
         {
@@ -213,9 +352,8 @@ namespace Searchly
 
         private string GenerateTaskId(Task task)
         {
-            return $"{task.Name}_{task.CreationDate:yyyyMMddHHmmss}";
+            return $"{task.TaskType}_{task.Name}_{task.CreationDate:yyyyMMddHHmmss}";
         }
-
 
         public bool HasPersistedData()
         {

@@ -149,27 +149,18 @@ namespace Searchly
             return _tasks.Count > 0;
         }
 
-        /// <summary>
-        /// Salva todas as tarefas na persistência
-        /// </summary>
         public void SaveAllTasks()
         {
             _persistenceManager.SaveTasks(_tasks);
             Console.WriteLine("Todas as tarefas foram salvas na persistência.");
         }
 
-        /// <summary>
-        /// Recarrega tarefas da persistência
-        /// </summary>
         public void ReloadTasks()
         {
             _tasks = _persistenceManager.LoadTasks();
             Console.WriteLine($"Recarregadas {_tasks.Count} tarefas da persistência.");
         }
 
-        /// <summary>
-        /// Limpa todos os dados persistidos
-        /// </summary>
         public void ClearPersistedData()
         {
             _persistenceManager.ClearAllData();
