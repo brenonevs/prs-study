@@ -1,0 +1,26 @@
+{
+  "name": "scheduler-manager",
+  "version": "1.0.0",
+  "description": "Google Cloud Function para gerenciar scrapers usando Cloud Tasks",
+  "main": "scheduler_manager.js",
+  "scripts": {
+    "start": "node scheduler_manager.js",
+    "test": "node scheduler_manager.js"
+  },
+  "dependencies": {
+    "@google-cloud/functions-framework": "^3.3.0",
+    "@google-cloud/tasks": "^5.1.0",
+    "pg": "^8.11.3"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "google-cloud-functions",
+    "cloud-tasks",
+    "scraper",
+    "scheduler"
+  ],
+  "author": "",
+  "license": "MIT"
+}
