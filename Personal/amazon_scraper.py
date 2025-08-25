@@ -4,6 +4,8 @@ import functions_framework
 import psycopg2
 from datetime import datetime
 import os
+import re
+from decimal import Decimal
 
 
 class AmazonScraper:
@@ -19,27 +21,63 @@ class AmazonScraper:
         response.raise_for_status()
         return response.text
 
-    def extract_price_from_html(self, html: str) -> str | None:
+    def extract_price_from_html(self, html: str) -> Decimal | None:
         soup = BeautifulSoup(html, "html.parser")
 
         preferred = soup.select_one(
             "#apex_offerDisplay_desktop .a-price .a-offscreen"
         )
         if preferred and preferred.get_text(strip=True):
-            return preferred.get_text(strip=True)
+            return self._parse_price_to_decimal(preferred.get_text(strip=True))
         
         alt_core = soup.select_one("#corePrice_feature_div .a-price .a-offscreen")
         if alt_core and alt_core.get_text(strip=True):
-            return alt_core.get_text(strip=True)
+            return self._parse_price_to_decimal(alt_core.get_text(strip=True))
         
         for span in soup.select("span.a-offscreen"):
             text = span.get_text(strip=True)
             if text and ("R$" in text or "," in text):
-                return text
+                return self._parse_price_to_decimal(text)
         
         return None
     
-    def run(self) -> str | None:
+    def _parse_price_to_decimal(self, price_text: str) -> Decimal | None:
+        """Converte texto de preço para valor decimal considerando formato brasileiro"""
+        if not price_text:
+            return None
+        
+        # Remove símbolos de moeda e espaços
+        clean_text = re.sub(r'[R$\s]', '', price_text)
+        
+        # Lógica para distinguir separador de milhares vs decimais
+        # Se há vírgula, ela é o separador decimal, pontos são separadores de milhares
+        if ',' in clean_text:
+            # Formato: 1.234,56 -> remove pontos e substitui vírgula por ponto
+            clean_text = clean_text.replace('.', '').replace(',', '.')
+        else:
+            # Se não há vírgula, verifica se o ponto é separador decimal ou de milhares
+            # Se há apenas um ponto e há exatamente 2 dígitos após ele, é decimal
+            # Caso contrário, é separador de milhares
+            dot_parts = clean_text.split('.')
+            if len(dot_parts) == 2 and len(dot_parts[1]) == 2:
+                # Formato: 1234.56 (decimal)
+                pass  # mantém como está
+            else:
+                # Formato: 1.234 ou 1.234.567 (separadores de milhares)
+                clean_text = clean_text.replace('.', '')
+        
+        # Extrai apenas números e ponto decimal
+        price_match = re.search(r'\d+(?:\.\d{1,2})?', clean_text)
+        
+        if price_match:
+            try:
+                return Decimal(price_match.group())
+            except:
+                return None
+        
+        return None
+    
+    def run(self) -> Decimal | None:
         html = self.fetch_product_html_via_scraperapi()
         return self.extract_price_from_html(html)
 
@@ -59,7 +97,7 @@ def create_monitors_table():
         id SERIAL PRIMARY KEY,
         url TEXT NOT NULL,
         store VARCHAR(50) NOT NULL,
-        price VARCHAR(100),
+        price DECIMAL(10,2),
         product_name VARCHAR(500),
         last_mined_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'),
         next_mine_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 hour',
@@ -73,7 +111,7 @@ def create_monitors_table():
     cursor.close()
     conn.close()
 
-def save_price_to_db(url: str, store: str, price: str, product_name: str = None):
+def save_price_to_db(url: str, store: str, price: Decimal, product_name: str = None):
     """Salva ou atualiza o preço no banco de dados"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -124,7 +162,7 @@ def amazon_scraper(request):
         save_success = save_price_to_db(url, 'amazon', price)
         
         return {
-            'price': price,
+            'price': float(price) if price else None,
             'url': url,
             'store': 'amazon',
             'saved_to_db': save_success,
