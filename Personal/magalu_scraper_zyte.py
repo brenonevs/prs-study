@@ -109,13 +109,14 @@ def get_db_connection():
     return psycopg2.connect(connection_string)
 
 def create_monitors_table():
-    """Cria a tabela monitors se ela não existir"""
+    """Cria a tabela monitors se ela não existir (com user_id e chave única user_id+url)."""
     conn = get_db_connection()
     cursor = conn.cursor()
     
     create_table_query = """
     CREATE TABLE IF NOT EXISTS monitors (
         id SERIAL PRIMARY KEY,
+        user_id VARCHAR(255) NOT NULL,
         url TEXT NOT NULL,
         store VARCHAR(50) NOT NULL,
         price DECIMAL(10,2),
@@ -123,7 +124,8 @@ def create_monitors_table():
         last_mined_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'),
         next_mine_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 hour',
         created_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'),
-        updated_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')
+        updated_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'),
+        UNIQUE (user_id, url)
     );
     """
     
@@ -132,15 +134,15 @@ def create_monitors_table():
     cursor.close()
     conn.close()
 
-def save_price_to_db(url: str, store: str, price: Decimal, product_name: str = None):
-    """Salva ou atualiza o preço no banco de dados"""
+def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, product_name: str = None):
+    """Salva ou atualiza o preço no banco de dados para user_id+url."""
     conn = get_db_connection()
     cursor = conn.cursor()
     
     try:
-        # Verifica se já existe um registro para esta URL
-        check_query = "SELECT id FROM monitors WHERE url = %s"
-        cursor.execute(check_query, (url,))
+        # Verifica se já existe um registro para este user_id+url
+        check_query = "SELECT id FROM monitors WHERE user_id = %s AND url = %s"
+        cursor.execute(check_query, (user_id, url))
         existing_record = cursor.fetchone()
         
         if existing_record:
@@ -149,16 +151,16 @@ def save_price_to_db(url: str, store: str, price: Decimal, product_name: str = N
             UPDATE monitors 
             SET price = %s, product_name = %s, last_mined_at = CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo', 
                 next_mine_at = (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 hour', updated_at = CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo' 
-            WHERE url = %s
+            WHERE user_id = %s AND url = %s
             """
-            cursor.execute(update_query, (price, product_name, url))
+            cursor.execute(update_query, (price, product_name, user_id, url))
         else:
             # Insere novo registro
             insert_query = """
-            INSERT INTO monitors (url, store, price, product_name, last_mined_at, next_mine_at, created_at) 
-            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo', (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 hour', CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')
+            INSERT INTO monitors (user_id, url, store, price, product_name, last_mined_at, next_mine_at, created_at) 
+            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo', (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 hour', CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')
             """
-            cursor.execute(insert_query, (url, store, price, product_name))
+            cursor.execute(insert_query, (user_id, url, store, price, product_name))
         
         conn.commit()
         return True
@@ -176,19 +178,21 @@ def magalu_scraper(request):
     """Google Cloud Function para extrair preços do Magazine Luiza"""
     request_json = request.get_json(silent=True)
     
-    if request_json and 'url' in request_json:
+    if request_json and 'url' in request_json and 'userId' in request_json:
         url = request_json['url']
+        user_id = request_json['userId']
         
         try:
             scraper = MagaluScraper(url)
             price = scraper.run()
             
             create_monitors_table()
-            save_success = save_price_to_db(url, 'magalu', price)
+            save_success = save_price_to_db(user_id, url, 'magalu', price)
             
             return {
                 'price': float(price) if price else None,
                 'url': url,
+                'userId': user_id,
                 'store': 'magalu',
                 'saved_to_db': save_success,
                 'timestamp': datetime.now().isoformat()
@@ -214,4 +218,4 @@ def magalu_scraper(request):
                 'timestamp': datetime.now().isoformat()
             }, 500
     
-    return {'error': 'URL não fornecida'}, 400
+    return {'error': 'URL e/ou userId não fornecidos'}, 400

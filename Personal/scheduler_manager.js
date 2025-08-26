@@ -22,7 +22,7 @@ async function getProductsToMine() {
         await client.connect();
         
         const query = `
-            SELECT id, url, store, price, last_mined_at, next_mine_at
+            SELECT id, user_id, url, store, price, last_mined_at, next_mine_at
             FROM monitors 
             WHERE next_mine_at <= CURRENT_TIMESTAMP
             ORDER BY next_mine_at ASC
@@ -32,6 +32,7 @@ async function getProductsToMine() {
         
         const products = result.rows.map(row => ({
             id: row.id,
+            user_id: row.user_id,
             url: row.url,
             store: row.store,
             current_price: row.price,
@@ -49,7 +50,7 @@ async function getProductsToMine() {
     }
 }
 
-async function addTaskToQueue(store, url, productId) {
+async function addTaskToQueue(store, url, productId, userId) {
     try {
         const parent = tasksClient.queuePath(PROJECT_ID, LOCATION, QUEUE_NAME);
         
@@ -70,6 +71,7 @@ async function addTaskToQueue(store, url, productId) {
         const payload = {
             url: url,
             product_id: productId,
+            userId: userId,
             store: store
         };
         
@@ -97,7 +99,8 @@ async function addTaskToQueue(store, url, productId) {
             success: true,
             taskName: response.name,
             store: store,
-            url: url
+            url: url,
+            userId: userId
         };
         
     } catch (error) {
@@ -106,7 +109,8 @@ async function addTaskToQueue(store, url, productId) {
             success: false,
             error: error.message,
             store: store,
-            url: url
+            url: url,
+            userId: userId
         };
     }
 }
@@ -134,10 +138,11 @@ functions.http('schedulerManager', async (req, res) => {
         for (const product of productsToMine) {
             console.log(`Adicionando na fila: ${product.store} - ${product.url.substring(0, 50)}...`);
             
-            const taskResult = await addTaskToQueue(product.store, product.url, product.id);
+            const taskResult = await addTaskToQueue(product.store, product.url, product.id, product.user_id);
             
             const result = {
                 product_id: product.id,
+                user_id: product.user_id,
                 store: product.store,
                 url: product.url,
                 previous_price: product.current_price,
