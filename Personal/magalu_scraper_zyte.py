@@ -138,6 +138,25 @@ def create_monitors_table():
     cursor.close()
     conn.close()
 
+def get_existing_desired_price(user_id: str, url: str) -> Decimal | None:
+    """Busca o desired_price existente para user_id+url. Retorna Decimal ou None."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT desired_price FROM monitors WHERE user_id = %s AND url = %s", (user_id, url))
+        row = cursor.fetchone()
+        if row and row[0] is not None:
+            try:
+                return Decimal(str(row[0]))
+            except Exception:
+                return None
+        return None
+    except Exception:
+        return None
+    finally:
+        cursor.close()
+        conn.close()
+
 def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, product_name: str | None = None, *, name: str | None = None, desired_price: Decimal | None = None, notification_platform: str | None = None):
     """Salva ou atualiza dados do monitor para user_id+url. Atualiza apenas colunas recebidas."""
     conn = get_db_connection()
@@ -192,13 +211,10 @@ def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, product
             params.extend([user_id, url])
             cursor.execute(update_query, tuple(params))
         else:
-            # Insere novo registro
-            columns = ["user_id", "url", "store", "price", "product_name", "last_mined_at", "next_mine_at", "created_at"]
-            values = [user_id, url, store, price, product_name,
-                      "CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'",
-                      "(CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 hour'",
-                      "CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'"]
-            placeholders = ["%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s"]
+            # Insere novo registro com timestamps embutidos na query
+            base_columns = ["user_id", "url", "store", "price", "product_name"]
+            base_placeholders = ["%s", "%s", "%s", "%s", "%s"]
+            values = [user_id, url, store, price, product_name]
 
             optional_cols = []
             optional_vals = []
@@ -215,12 +231,12 @@ def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, product
                 optional_cols.append("notification_platform")
                 optional_vals.append(notification_platform)
 
-            all_columns = columns + optional_cols
-            all_placeholders = placeholders + ["%s"] * len(optional_cols)
+            all_columns = base_columns + optional_cols
+            all_placeholders = base_placeholders + ["%s"] * len(optional_cols)
 
             insert_query = f"""
-            INSERT INTO monitors ({', '.join(all_columns)}) 
-            VALUES ({', '.join(all_placeholders)})
+            INSERT INTO monitors ({', '.join(all_columns)}, last_mined_at, next_mine_at, created_at) 
+            VALUES ({', '.join(all_placeholders)}, CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo', (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 hour', CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')
             """
             cursor.execute(insert_query, tuple(values + optional_vals))
         
@@ -244,8 +260,8 @@ def magalu_scraper(request):
         url = request_json['url']
         user_id = request_json['userId']
         name = request_json.get('name')
-        desired_price_raw = request_json.get('desiredPrice')
-        notification_platform = request_json.get('notificationPlatform')
+        desired_price_raw = request_json.get('desired_price')
+        notification_platform = request_json.get('notification_platform')
         desired_price_decimal = None
         
         try:
@@ -258,6 +274,8 @@ def magalu_scraper(request):
                     desired_price_decimal = Decimal(str(desired_price_raw))
                 except Exception:
                     desired_price_decimal = None
+            else:
+                desired_price_decimal = get_existing_desired_price(user_id, url)
 
             save_success = save_price_to_db(
                 user_id, url, 'magalu', price,
