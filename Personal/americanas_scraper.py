@@ -81,7 +81,7 @@ def get_db_connection():
     return psycopg2.connect(connection_string)
 
 def create_monitors_table():
-    """Cria a tabela monitors se ela não existir (com user_id e chave única user_id+url)."""
+    """Cria a tabela monitors se ela não existir (com colunas opcionais e is_below_desired_price)."""
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -93,6 +93,10 @@ def create_monitors_table():
         store VARCHAR(50) NOT NULL,
         price DECIMAL(10,2),
         product_name VARCHAR(500),
+        name VARCHAR(255),
+        desired_price DECIMAL(10,2),
+        notification_platform VARCHAR(50),
+        is_below_desired_price BOOLEAN,
         last_mined_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'),
         next_mine_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 hour',
         created_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'),
@@ -106,8 +110,8 @@ def create_monitors_table():
     cursor.close()
     conn.close()
 
-def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, product_name: str = None):
-    """Salva ou atualiza o preço no banco de dados para user_id+url."""
+def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, product_name: str | None = None, *, name: str | None = None, desired_price: Decimal | None = None, notification_platform: str | None = None):
+    """Salva ou atualiza dados do monitor para user_id+url. Atualiza apenas colunas recebidas."""
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -117,22 +121,80 @@ def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, product
         cursor.execute(check_query, (user_id, url))
         existing_record = cursor.fetchone()
         
+        is_below: bool | None = None
+        if desired_price is not None and price is not None:
+            try:
+                is_below = price < desired_price
+            except Exception:
+                is_below = None
+
         if existing_record:
-            # Atualiza o registro existente
-            update_query = """
+            # Atualiza somente colunas enviadas
+            set_parts = [
+                "last_mined_at = CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'",
+                "next_mine_at = (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 hour'",
+                "updated_at = CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'",
+            ]
+            params: list[object] = []
+
+            if price is not None:
+                set_parts.append("price = %s")
+                params.append(price)
+            if product_name is not None:
+                set_parts.append("product_name = %s")
+                params.append(product_name)
+            if name is not None:
+                set_parts.append("name = %s")
+                params.append(name)
+            if desired_price is not None:
+                set_parts.append("desired_price = %s")
+                params.append(desired_price)
+                if is_below is not None:
+                    set_parts.append("is_below_desired_price = %s")
+                    params.append(is_below)
+            if notification_platform is not None:
+                set_parts.append("notification_platform = %s")
+                params.append(notification_platform)
+
+            update_query = f"""
             UPDATE monitors 
-            SET price = %s, product_name = %s, last_mined_at = CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo', 
-                next_mine_at = (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 hour', updated_at = CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo' 
+            SET {', '.join(set_parts)}
             WHERE user_id = %s AND url = %s
             """
-            cursor.execute(update_query, (price, product_name, user_id, url))
+            params.extend([user_id, url])
+            cursor.execute(update_query, tuple(params))
         else:
             # Insere novo registro
-            insert_query = """
-            INSERT INTO monitors (user_id, url, store, price, product_name, last_mined_at, next_mine_at, created_at) 
-            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo', (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 hour', CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')
+            columns = ["user_id", "url", "store", "price", "product_name", "last_mined_at", "next_mine_at", "created_at"]
+            values = [user_id, url, store, price, product_name,
+                      "CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'",
+                      "(CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 hour'",
+                      "CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'"]
+            placeholders = ["%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s"]
+
+            optional_cols = []
+            optional_vals = []
+            if name is not None:
+                optional_cols.append("name")
+                optional_vals.append(name)
+            if desired_price is not None:
+                optional_cols.append("desired_price")
+                optional_vals.append(desired_price)
+                if is_below is not None:
+                    optional_cols.append("is_below_desired_price")
+                    optional_vals.append(is_below)
+            if notification_platform is not None:
+                optional_cols.append("notification_platform")
+                optional_vals.append(notification_platform)
+
+            all_columns = columns + optional_cols
+            all_placeholders = placeholders + ["%s"] * len(optional_cols)
+
+            insert_query = f"""
+            INSERT INTO monitors ({', '.join(all_columns)}) 
+            VALUES ({', '.join(all_placeholders)})
             """
-            cursor.execute(insert_query, (user_id, url, store, price, product_name))
+            cursor.execute(insert_query, tuple(values + optional_vals))
         
         conn.commit()
         return True
@@ -153,15 +215,33 @@ def americanas_scraper(request):
     if request_json and 'url' in request_json and 'userId' in request_json:
         url = request_json['url']
         user_id = request_json['userId']
+        name = request_json.get('name')
+        desired_price_raw = request_json.get('desiredPrice')
+        notification_platform = request_json.get('notificationPlatform')
+        desired_price_decimal = None
         scraper = AmericanasScraper(url)
         price = scraper.run()
         
         create_monitors_table()
-        save_success = save_price_to_db(user_id, url, 'americanas', price)
+        if desired_price_raw is not None:
+            try:
+                desired_price_decimal = Decimal(str(desired_price_raw))
+            except Exception:
+                desired_price_decimal = None
+        
+        save_success = save_price_to_db(
+            user_id, url, 'americanas', price,
+            name=name,
+            desired_price=desired_price_decimal,
+            notification_platform=notification_platform
+        )
         
         return {
             'price': float(price) if price else None,
             'url': url,
+            'name': name,
+            'desiredPrice': float(desired_price_decimal) if desired_price_decimal is not None else None,
+            'notificationPlatform': notification_platform,
             'userId': user_id,
             'store': 'americanas',
             'saved_to_db': save_success,
