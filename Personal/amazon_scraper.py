@@ -136,7 +136,54 @@ def get_existing_desired_price(user_id: str, url: str) -> Decimal | None:
         cursor.close()
         conn.close()
 
-def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, product_name: str | None = None, *, name: str | None = None, desired_price: Decimal | None = None, notification_platform: str | None = None):
+def get_latest_price_from_history(monitor_id: int) -> Decimal | None:
+    """Busca o preço mais recente do histórico para um monitor específico"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        query = """
+        SELECT price FROM price_history 
+        WHERE monitor_id = %s 
+        ORDER BY created_at DESC 
+        LIMIT 1
+        """
+        cursor.execute(query, (monitor_id,))
+        row = cursor.fetchone()
+        
+        if row and row[0] is not None:
+            return Decimal(str(row[0]))
+        return None
+        
+    except Exception:
+        return None
+    finally:
+        cursor.close()
+        conn.close()
+
+def save_price_to_history(monitor_id: int, price: Decimal, store: str):
+    """Salva um novo preço no histórico"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        insert_query = """
+        INSERT INTO price_history (monitor_id, price, store) 
+        VALUES (%s, %s, %s)
+        """
+        cursor.execute(insert_query, (monitor_id, price, store))
+        conn.commit()
+        return True
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"Erro ao salvar histórico de preços: {e}")
+        return False
+    finally:
+        cursor.close()
+        conn.close()
+
+def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, name: str | None = None, *, desired_price: Decimal | None = None, notification_platform: str | None = None):
     """Salva ou atualiza dados do monitor para user_id+url. Atualiza apenas colunas recebidas."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -153,7 +200,18 @@ def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, product
             except Exception:
                 is_below = None
 
+        monitor_id = None
+        
         if existing_record:
+            monitor_id = existing_record[0]
+            
+            # Verifica se o preço mudou comparando com o histórico mais recente
+            if price is not None:
+                latest_price = get_latest_price_from_history(monitor_id)
+                if latest_price is None or latest_price != price:
+                    # Preço mudou ou é o primeiro registro, salva no histórico
+                    save_price_to_history(monitor_id, price, store)
+            
             set_parts = [
                 "last_mined_at = CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'",
                 "next_mine_at = (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 hour'",
@@ -164,9 +222,6 @@ def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, product
             if price is not None:
                 set_parts.append("price = %s")
                 params.append(price)
-            if product_name is not None:
-                set_parts.append("product_name = %s")
-                params.append(product_name)
             if name is not None:
                 set_parts.append("name = %s")
                 params.append(name)
@@ -187,16 +242,15 @@ def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, product
             """
             params.extend([user_id, url])
             cursor.execute(update_query, tuple(params))
+            # Para updates, commit no final
+            conn.commit()
         else:
-            base_columns = ["user_id", "url", "store", "price", "product_name"]
+            base_columns = ["user_id", "url", "store", "price", "name"]
             base_placeholders = ["%s", "%s", "%s", "%s", "%s"]
-            values = [user_id, url, store, price, product_name]
+            values = [user_id, url, store, price, name]
 
             optional_cols = []
             optional_vals = []
-            if name is not None:
-                optional_cols.append("name")
-                optional_vals.append(name)
             if desired_price is not None:
                 optional_cols.append("desired_price")
                 optional_vals.append(desired_price)
@@ -213,10 +267,18 @@ def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, product
             insert_query = f"""
             INSERT INTO monitors ({', '.join(all_columns)}, last_mined_at, next_mine_at, created_at) 
             VALUES ({', '.join(all_placeholders)}, CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo', (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 hour', CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo')
+            RETURNING id
             """
             cursor.execute(insert_query, tuple(values + optional_vals))
-        
-        conn.commit()
+            result = cursor.fetchone()
+            
+            # Commit do monitor primeiro para garantir que o ID existe no banco
+            conn.commit()
+            
+            if result and price is not None:
+                monitor_id = result[0]
+                # Primeiro registro sempre vai para o histórico
+                save_price_to_history(monitor_id, price, store)
         return True
         
     except Exception as e:

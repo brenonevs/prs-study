@@ -8,28 +8,64 @@ import re
 from decimal import Decimal
 
 
-class FastShopScraper:
+class AmazonScraper:
     def __init__(self, url: str):
         self.url = url
     
-    def fetch_product_html_via_scraperapi(self) -> str:
-        payload = {
-            "api_key": "9f5a0cdc28ed693568ca66e8a7baac2d",
-            "url": self.url,
-            "render": "true"
-        }
-        response = requests.get("https://api.scraperapi.com/", params=payload, timeout=60)
-        response.raise_for_status()
-        return response.text
-    
+    def fetch_product_html_via_zyte(self) -> str:
+        try:
+            api_response = requests.post(
+                "https://api.zyte.com/v1/extract",
+                auth=("867cfbf9cf314ecc892f2583a1a6dc36", ""),
+                json={
+                    "url": self.url,
+                    "browserHtml": True,
+                },
+                timeout=3600  
+            )
+            
+            # Log do status da resposta para debug
+            print(f"Zyte API Status: {api_response.status_code}")
+            
+            if api_response.status_code != 200:
+                print(f"Zyte API Error Response: {api_response.text}")
+                raise requests.exceptions.RequestException(f"Zyte API returned status {api_response.status_code}: {api_response.text}")
+            
+            response_json = api_response.json()
+            
+            if "browserHtml" not in response_json:
+                raise KeyError("browserHtml not found in Zyte API response")
+                
+            return response_json["browserHtml"]
+            
+        except requests.exceptions.HTTPError as e:
+            print(f"HTTPError from Zyte API: {e}")
+            print(f"Response content: {api_response.text if 'api_response' in locals() else 'No response'}")
+            raise
+        except requests.exceptions.RequestException as e:
+            print(f"Request error to Zyte API: {e}")
+            raise
+        except Exception as e:
+            print(f"Unexpected error with Zyte API: {e}")
+            raise
+
     def extract_price_from_html(self, html: str) -> Decimal | None:
         soup = BeautifulSoup(html, "html.parser")
+
+        preferred = soup.select_one(
+            "#apex_offerDisplay_desktop .a-price .a-offscreen"
+        )
+        if preferred and preferred.get_text(strip=True):
+            return self._parse_price_to_decimal(preferred.get_text(strip=True))
         
-        price_element = soup.find("span", attrs={"data-testid": "price-value"})
+        alt_core = soup.select_one("#corePrice_feature_div .a-price .a-offscreen")
+        if alt_core and alt_core.get_text(strip=True):
+            return self._parse_price_to_decimal(alt_core.get_text(strip=True))
         
-        if price_element:
-            price_text = price_element.get_text().strip()
-            return self._parse_price_to_decimal(price_text)
+        for span in soup.select("span.a-offscreen"):
+            text = span.get_text(strip=True)
+            if text and ("R$" in text or "," in text):
+                return self._parse_price_to_decimal(text)
         
         return None
     
@@ -70,7 +106,7 @@ class FastShopScraper:
         return None
     
     def run(self) -> Decimal | None:
-        html = self.fetch_product_html_via_scraperapi()
+        html = self.fetch_product_html_via_zyte()
         return self.extract_price_from_html(html)
 
 
@@ -91,8 +127,7 @@ def create_monitors_table():
         url TEXT NOT NULL,
         store VARCHAR(50) NOT NULL,
         price DECIMAL(10,2),
-        product_name VARCHAR(500),
-        name VARCHAR(255),
+        name VARCHAR(500),
         desired_price DECIMAL(10,2),
         notification_platform VARCHAR(50),
         is_below_desired_price BOOLEAN,
@@ -194,19 +229,18 @@ def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, name: s
                 is_below = None
 
         monitor_id = None
+        
         if existing_record:
             monitor_id = existing_record[0]
             
-            # Verificar se houve mudança de preço
+            # Verifica se o preço mudou comparando com o histórico mais recente
             if price is not None:
                 latest_price = get_latest_price_from_history(monitor_id)
                 if latest_price is None or latest_price != price:
-                    print(f"Preço alterado de {latest_price} para {price}. Salvando no histórico.")
+                    # Preço mudou ou é o primeiro registro, salva no histórico
                     save_price_to_history(monitor_id, price, store)
-                else:
-                    print(f"Preço mantido em {price}. Não salvando no histórico.")
             
-            # Atualiza somente colunas enviadas
+            # Atualiza o registro existente com colunas enviadas
             set_parts = [
                 "last_mined_at = CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'",
                 "next_mine_at = (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 hour'",
@@ -237,6 +271,7 @@ def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, name: s
             """
             params.extend([user_id, url])
             cursor.execute(update_query, tuple(params))
+            # Para updates, commit no final
             conn.commit()
         else:
             # Insere novo registro com timestamps embutidos na query
@@ -265,19 +300,16 @@ def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, name: s
             RETURNING id
             """
             cursor.execute(insert_query, tuple(values + optional_vals))
-            new_record = cursor.fetchone()
+            result = cursor.fetchone()
             
             # Commit do monitor primeiro para garantir que o ID existe no banco
             conn.commit()
             
-            if new_record:
-                monitor_id = new_record[0]
-                print(f"Novo registro inserido com sucesso (ID: {monitor_id})")
-                
-                # Salvar preço inicial no histórico
-                if price is not None:
-                    print(f"Salvando preço inicial {price} no histórico.")
-                    save_price_to_history(monitor_id, price, store)
+            if result and price is not None:
+                monitor_id = result[0]
+                # Primeiro registro sempre vai para o histórico
+                save_price_to_history(monitor_id, price, store)
+        
         return True
         
     except Exception as e:
@@ -289,8 +321,8 @@ def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, name: s
         conn.close()
 
 @functions_framework.http
-def fastshop_scraper(request):
-    """Google Cloud Function para extrair preços da FastShop"""
+def amazon_scraper(request):
+    """Google Cloud Function para extrair preços da Amazon"""
     request_json = request.get_json(silent=True)
     
     if request_json and 'url' in request_json and 'userId' in request_json:
@@ -300,35 +332,57 @@ def fastshop_scraper(request):
         desired_price_raw = request_json.get('desired_price')
         notification_platform = request_json.get('notification_platform')
         desired_price_decimal = None
-        scraper = FastShopScraper(url)
-        price = scraper.run()
         
-        create_monitors_table()
-        if desired_price_raw is not None:
-            try:
-                desired_price_decimal = Decimal(str(desired_price_raw))
-            except Exception:
-                desired_price_decimal = None
-        else:
-            desired_price_decimal = get_existing_desired_price(user_id, url)
-        
-        save_success = save_price_to_db(
-            user_id, url, 'fastshop', price,
-            name=name,
-            desired_price=desired_price_decimal,
-            notification_platform=notification_platform
-        )
-        
-        return {
-            'price': float(price) if price else None,
-            'url': url,
-            'name': name,
-            'desiredPrice': float(desired_price_decimal) if desired_price_decimal is not None else None,
-            'notificationPlatform': notification_platform,
-            'userId': user_id,
-            'store': 'fastshop',
-            'saved_to_db': save_success,
-            'timestamp': datetime.now().isoformat()
-        }
+        try:
+            scraper = AmazonScraper(url)
+            price = scraper.run()
+            
+            create_monitors_table()
+            if desired_price_raw is not None:
+                try:
+                    desired_price_decimal = Decimal(str(desired_price_raw))
+                except Exception:
+                    desired_price_decimal = None
+            else:
+                desired_price_decimal = get_existing_desired_price(user_id, url)
+
+            save_success = save_price_to_db(
+                user_id, url, 'amazon', price,
+                name=name,
+                desired_price=desired_price_decimal,
+                notification_platform=notification_platform
+            )
+            
+            return {
+                'price': float(price) if price else None,
+                'url': url,
+                'name': name,
+                'desiredPrice': float(desired_price_decimal) if desired_price_decimal is not None else None,
+                'notificationPlatform': notification_platform,
+                'userId': user_id,
+                'store': 'amazon',
+                'saved_to_db': save_success,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Erro na API do Zyte: {str(e)}"
+            print(error_msg)
+            return {
+                'error': error_msg,
+                'url': url,
+                'store': 'amazon',
+                'timestamp': datetime.now().isoformat()
+            }, 502
+            
+        except Exception as e:
+            error_msg = f"Erro inesperado: {str(e)}"
+            print(error_msg)
+            return {
+                'error': error_msg,
+                'url': url,
+                'store': 'amazon',
+                'timestamp': datetime.now().isoformat()
+            }, 500
     
     return {'error': 'URL e/ou userId não fornecidos'}, 400
