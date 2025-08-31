@@ -158,11 +158,15 @@ def save_price_to_history(monitor_id: int, price: Decimal, store: str):
     cursor = conn.cursor()
     
     try:
+        # Obter o próximo ID disponível
+        cursor.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM price_history")
+        next_id = cursor.fetchone()[0]
+        
         insert_query = """
-        INSERT INTO price_history (monitor_id, price, store) 
-        VALUES (%s, %s, %s)
+        INSERT INTO price_history (id, monitor_id, price, store) 
+        VALUES (%s, %s, %s, %s)
         """
-        cursor.execute(insert_query, (monitor_id, price, store))
+        cursor.execute(insert_query, (next_id, monitor_id, price, store))
         conn.commit()
         return True
         
