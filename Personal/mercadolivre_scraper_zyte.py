@@ -8,7 +8,7 @@ import re
 from decimal import Decimal
 
 
-class MagaluScraper:
+class MercadoLivreScraper:
     def __init__(self, url: str):
         self.url = url
     
@@ -52,13 +52,18 @@ class MagaluScraper:
     def extract_price_from_html(self, html: str) -> Decimal | None:
         soup = BeautifulSoup(html, "html.parser")
         
-        price_element = soup.find("p", attrs={"data-testid": "price-value"})
+        # Busca pelo elemento que contém o preço no Mercado Livre
+        price_element = soup.find("span", class_="andes-money-amount__fraction")
+        cents_element = soup.find("span", class_="andes-money-amount__cents")
         
         if price_element:
             price_text = price_element.get_text().strip()
-            if price_text.startswith("ou "):
-                price_text = price_text[3:].strip()
-            return self._parse_price_to_decimal(price_text)
+            if cents_element:
+                cents_text = cents_element.get_text().strip()
+                full_price = f"{price_text},{cents_text}"
+            else:
+                full_price = price_text
+            return self._parse_price_to_decimal(full_price)
         
         return None
     
@@ -314,8 +319,8 @@ def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, name: s
         conn.close()
 
 @functions_framework.http
-def magalu_scraper(request):
-    """Google Cloud Function para extrair preços do Magazine Luiza"""
+def mercadolivre_scraper(request):
+    """Google Cloud Function para extrair preços do Mercado Livre"""
     request_json = request.get_json(silent=True)
     
     if request_json and 'url' in request_json and 'userId' in request_json:
@@ -327,7 +332,7 @@ def magalu_scraper(request):
         desired_price_decimal = None
         
         try:
-            scraper = MagaluScraper(url)
+            scraper = MercadoLivreScraper(url)
             price = scraper.run()
             
             create_monitors_table()
@@ -340,7 +345,7 @@ def magalu_scraper(request):
                 desired_price_decimal = get_existing_desired_price(user_id, url)
 
             save_success = save_price_to_db(
-                user_id, url, 'magalu', price,
+                user_id, url, 'mercadolivre', price,
                 name=name,
                 desired_price=desired_price_decimal,
                 notification_platform=notification_platform
@@ -353,7 +358,7 @@ def magalu_scraper(request):
                 'desiredPrice': float(desired_price_decimal) if desired_price_decimal is not None else None,
                 'notificationPlatform': notification_platform,
                 'userId': user_id,
-                'store': 'magalu',
+                'store': 'mercadolivre',
                 'saved_to_db': save_success,
                 'timestamp': datetime.now().isoformat()
             }
@@ -364,7 +369,7 @@ def magalu_scraper(request):
             return {
                 'error': error_msg,
                 'url': url,
-                'store': 'magalu',
+                'store': 'mercadolivre',
                 'timestamp': datetime.now().isoformat()
             }, 502
             
@@ -374,7 +379,7 @@ def magalu_scraper(request):
             return {
                 'error': error_msg,
                 'url': url,
-                'store': 'magalu',
+                'store': 'mercadolivre',
                 'timestamp': datetime.now().isoformat()
             }, 500
     
