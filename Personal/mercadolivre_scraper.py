@@ -25,6 +25,14 @@ class MercadoLivreScraper:
         soup = BeautifulSoup(html, "html.parser")
         
         # Busca pelo elemento que contém o preço no Mercado Livre
+        # Primeiro tenta o padrão mais específico
+        price_container = soup.find("span", class_="andes-money-amount ui-pdp-price__part andes-money-amount--cents-superscript andes-money-amount--compact")
+        if price_container:
+            price_element = price_container.find("span", class_="andes-money-amount__fraction")
+            if price_element:
+                return self._parse_price_to_decimal(price_element.get_text().strip())
+        
+        # Fallback para o padrão anterior
         price_element = soup.find("span", class_="andes-money-amount__fraction")
         cents_element = soup.find("span", class_="andes-money-amount__cents")
         
