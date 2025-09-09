@@ -186,7 +186,7 @@ def get_latest_price_from_history(monitor_id: int) -> Decimal | None:
         return None
     finally:
         cursor.close()
-        conn.close()aczz
+        conn.close()
 
 def save_price_to_history(monitor_id: int, price: Decimal, store: str):
     """Salva um novo preço no histórico"""
@@ -323,6 +323,37 @@ def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, name: s
         cursor.close()
         conn.close()
 
+def send_email_notification(user_email: str, user_name: str, user_id: str, product_name: str, current_price: Decimal, desired_price: Decimal, product_url: str, store: str):
+    """Envia notificação por e-mail quando preço fica abaixo do desejado"""
+    try:
+        email_data = {
+            "user_email": user_email,
+            "user_name": user_name,
+            "user_id": user_id,
+            "product_name": product_name,
+            "current_price": float(current_price),
+            "desired_price": float(desired_price),
+            "product_url": product_url,
+            "store": store
+        }
+        
+        response = requests.post(
+            "https://tagfy-resend-email-575184900812.southamerica-east1.run.app",
+            json=email_data,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            print(f"E-mail de notificação enviado com sucesso para {user_email}")
+            return True
+        else:
+            print(f"Erro ao enviar e-mail: Status {response.status_code} - {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"Erro inesperado ao enviar e-mail de notificação: {e}")
+        return False
+
 @functions_framework.http
 def amazon_scraper(request):
     """Google Cloud Function para extrair preços da Amazon"""
@@ -334,6 +365,8 @@ def amazon_scraper(request):
         name = request_json.get('name')
         desired_price_raw = request_json.get('desired_price')
         notification_platform = request_json.get('notification_platform')
+        user_email = request_json.get('user_email')
+        user_name = request_json.get('user_name')
         desired_price_decimal = None
         
         try:
@@ -356,6 +389,21 @@ def amazon_scraper(request):
                 notification_platform=notification_platform
             )
             
+            email_sent = False
+            if (price is not None and desired_price_decimal is not None and 
+                price < desired_price_decimal and user_email and user_name and 
+                notification_platform == 'email'):
+                email_sent = send_email_notification(
+                    user_email=user_email,
+                    user_name=user_name,
+                    user_id=user_id,
+                    product_name=name or "Produto Amazon",
+                    current_price=price,
+                    desired_price=desired_price_decimal,
+                    product_url=url,
+                    store='amazon'
+                )
+            
             return {
                 'price': float(price) if price else None,
                 'url': url,
@@ -365,6 +413,7 @@ def amazon_scraper(request):
                 'userId': user_id,
                 'store': 'amazon',
                 'saved_to_db': save_success,
+                'email_sent': email_sent,
                 'timestamp': datetime.now().isoformat()
             }
             
