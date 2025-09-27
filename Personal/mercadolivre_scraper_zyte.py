@@ -138,7 +138,7 @@ def create_monitors_table():
         notification_platform VARCHAR(50),
         is_below_desired_price BOOLEAN,
         last_mined_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'),
-        next_mine_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 hour',
+        next_mine_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 day',
         created_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'),
         updated_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'),
         UNIQUE (user_id, url)
@@ -249,7 +249,7 @@ def save_price_to_db(user_id: str, url: str, store: str, price: Decimal, name: s
             # Atualiza o registro existente com colunas enviadas
             set_parts = [
                 "last_mined_at = CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'",
-                "next_mine_at = (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 hour'",
+                "next_mine_at = (CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo') + INTERVAL '1 day'",
                 "updated_at = CURRENT_TIMESTAMP AT TIME ZONE 'America/Sao_Paulo'",
             ]
             params: list[object] = []
